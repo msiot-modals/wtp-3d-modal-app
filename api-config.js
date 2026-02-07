@@ -278,17 +278,38 @@ function showLoginModal() {
 }
 
 /**
- * Ensure user is authenticated, show login if needed
+ * Get token from URL parameter
+ * @returns {string|null} Token from URL or null
+ */
+function getTokenFromUrl() {
+    const urlParams = new URLSearchParams(window.location.search);
+    return urlParams.get('auth');
+}
+
+/**
+ * Ensure user is authenticated, get token from URL or localStorage
  * @returns {Promise<void>}
  */
 async function ensureAuthenticated() {
-    // Try to load stored token first
+    // First, try to get token from URL parameter
+    const urlToken = getTokenFromUrl();
+    if (urlToken) {
+        console.log('Token found in URL parameter');
+        API_CONFIG.bearerToken = urlToken;
+        localStorage.setItem(API_CONFIG.storageKey, urlToken);
+        isAuthenticated = true;
+        return;
+    }
+
+    // Try to load stored token from localStorage
     if (loadStoredToken()) {
         return;
     }
 
-    // No stored token, show login modal
-    await showLoginModal();
+    // No token available - log error and don't start polling
+    console.error('No authentication token found. Please provide token via URL parameter: ?auth=YOUR_TOKEN');
+    isAuthenticated = false;
+    throw new Error('No authentication token provided');
 }
 
 // ============================================================================
@@ -426,15 +447,19 @@ async function fetchPlantData() {
         if (!response.ok) {
             // Handle 401 Unauthorized - token expired or invalid
             if (response.status === 401) {
-                console.warn('Authentication failed - token may be expired');
+                console.error('Authentication failed - token is invalid or expired');
+                console.error('Please reload the page with a valid token: ?auth=YOUR_TOKEN');
                 clearToken();
                 stopPolling();
 
-                // Show login modal to re-authenticate
-                await ensureAuthenticated();
+                // Update UI to show authentication error
+                const dataSource = document.getElementById('data-source');
+                if (dataSource) {
+                    dataSource.textContent = 'Data: Invalid Token';
+                    dataSource.style.color = '#ff5252';
+                }
 
-                // Retry the request with new token
-                return await fetchPlantData();
+                throw new Error('Authentication failed - invalid or expired token');
             }
 
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -663,8 +688,16 @@ async function initAPI() {
         }
     } catch (error) {
         console.error('Authentication failed:', error);
+        console.error('Usage: Add ?auth=YOUR_BEARER_TOKEN to the URL');
         connectionStatus = 'error';
         updateConnectionIndicator();
+
+        // Update data source to show error
+        const dataSource = document.getElementById('data-source');
+        if (dataSource) {
+            dataSource.textContent = 'Data: No Token';
+            dataSource.style.color = '#ff5252';
+        }
     }
 }
 
@@ -706,15 +739,6 @@ function createConnectionIndicator() {
                 font-size: 10px;
                 margin-left: 5px;
             ">Start</button>
-            <button id="api-logout-btn" style="
-                background: #ff5252;
-                border: none;
-                color: #fff;
-                padding: 4px 8px;
-                border-radius: 4px;
-                cursor: pointer;
-                font-size: 10px;
-            " title="Logout and clear token">Logout</button>
         </div>
 
         <style>
@@ -754,26 +778,26 @@ function createConnectionIndicator() {
     }
 
     // Add logout button listener
-    const logoutBtn = document.getElementById('api-logout-btn');
-    if (logoutBtn) {
-        logoutBtn.addEventListener('click', async () => {
-            if (confirm('Are you sure you want to logout? This will clear your stored token.')) {
-                stopPolling();
-                clearToken();
+    // const logoutBtn = document.getElementById('api-logout-btn');
+    // if (logoutBtn) {
+    //     logoutBtn.addEventListener('click', async () => {
+    //         if (confirm('Are you sure you want to logout? This will clear your stored token. To re-authenticate, reload the page with ?auth=YOUR_TOKEN')) {
+    //             stopPolling();
+    //             clearToken();
+    //             connectionStatus = 'disconnected';
+    //             updateConnectionIndicator();
 
-                // Show login modal again
-                try {
-                    await ensureAuthenticated();
-                    // Restart polling if it was previously active
-                    if (API_CONFIG.autoStart) {
-                        startPolling();
-                    }
-                } catch (error) {
-                    console.error('Re-authentication failed:', error);
-                }
-            }
-        });
-    }
+    //             // Update data source indicator
+    //             const dataSource = document.getElementById('data-source');
+    //             if (dataSource) {
+    //                 dataSource.textContent = 'Data: Logged Out';
+    //                 dataSource.style.color = '#888';
+    //             }
+
+    //             console.log('Logged out. To re-authenticate, reload the page with ?auth=YOUR_TOKEN');
+    //         }
+    //     });
+    // }
 
     // Update button text on initialization
     if (API_CONFIG.autoStart) {
