@@ -1,0 +1,27 @@
+name: Deploy to EC2
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy-on-ec2:
+    runs-on: ubuntu-latest
+
+    steps:
+
+    - name: Copy files and restart PM2 in one step
+      run: |
+        echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > key.pem
+        chmod 600 key.pem
+
+        # Copy files
+        scp -i key.pem -o StrictHostKeyChecking=no -r ./* \
+          ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}:/home/ubuntu/wtp-3d-modal-app/
+
+        # Run remote commands
+        ssh -i key.pem -o StrictHostKeyChecking=no \
+          ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }} << 'EOF'
+          cd /home/ubuntu/wtp-3d-modal-app
+          pm2 restart wtp-3d-app
+        EOF
