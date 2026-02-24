@@ -725,7 +725,7 @@ function createLabel(text, dataKey, index = null, size = 'normal') {
 
     div.innerHTML = `
         <div style="
-            background: rgba(0,0,0,0.8);
+            background: rgba(0,0,0,0.3);
             padding: ${config.padding};
             border-radius: 4px;
             font-size: ${config.fontSize};
@@ -1879,6 +1879,11 @@ function onWindowResize() {
 // Make updatePlantData available globally for external calls (Node-RED, etc.)
 window.WTPVisualizer = {
     updatePlantData,
+    clearData: () => {
+        plantData = getDefaultPayload();
+        updateDashboard();
+        updateLabels();
+    },
     startSimulation,
     stopSimulation,
     getPlantData: () => plantData,

@@ -9,16 +9,43 @@
  */
 
 // ============================================================================
+// MODE-BASED API URL RESOLUTION
+// ============================================================================
+
+const API_BASE_URLS = {
+    dev:     'https://api-dev-buildot.machinesensiot.xyz',
+    staging: 'https://api-staging-buildot.machinesensiot.xyz',
+    live:    'https://api.pre.iot.machinesensiot.com'
+};
+
+const API_PATHS = {
+    data: '/api/Dashboard/GetAssetDevicesData'
+};
+
+function getModeFromUrl() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const mode = urlParams.get('mode');
+    if (mode && API_BASE_URLS[mode]) {
+        console.log(`API mode: ${mode}`);
+        return mode;
+    }
+    console.error(`Missing or invalid ?mode= parameter. Valid values: dev, staging, live.`);
+    return null;
+}
+
+const _currentMode = getModeFromUrl();
+const _baseUrl = _currentMode ? API_BASE_URLS[_currentMode] : null;
+
+// ============================================================================
 // CONFIGURATION
 // ============================================================================
 
 const API_CONFIG = {
-    // API endpoints
-    authEndpoint: 'https://dev.auth.machinesensiot.com/api/Auth/Login',
-    dataEndpoint: 'https://api-staging-buildot.machinesensiot.xyz/api/Dashboard/GetAssetDevicesData',
+    // API endpoint resolved from ?mode= query parameter
+    dataEndpoint: _baseUrl + API_PATHS.data,
 
-    // Asset ID to fetch
-    assetId: 6141,
+    // Asset ID — read from URL query param ?assetId=..., no hardcoded default
+    assetId: null,
 
     // Bearer token (will be loaded from localStorage or obtained via login)
     bearerToken: null,
@@ -26,7 +53,7 @@ const API_CONFIG = {
     // Storage key for token
     storageKey: 'wtp_bearer_token',
 
-    // Polling interval in milliseconds (3 seconds = 3000ms)
+    // Polling interval in milliseconds
     pollingInterval: 3000,
 
     // Enable/disable API polling on startup
@@ -34,7 +61,7 @@ const API_CONFIG = {
 
     // Retry settings
     maxRetries: 3,
-    retryDelay: 2000 // ms
+    retryDelay: 2000
 };
 
 // ============================================================================
@@ -44,7 +71,7 @@ const API_CONFIG = {
 let pollingIntervalId = null;
 let isPolling = false;
 let lastFetchTime = null;
-let connectionStatus = 'disconnected'; // 'connected', 'disconnected', 'error'
+let connectionStatus = 'disconnected';
 let consecutiveErrors = 0;
 let isAuthenticated = false;
 
@@ -53,51 +80,7 @@ let isAuthenticated = false;
 // ============================================================================
 
 /**
- * Login to get bearer token
- * @param {string} username
- * @param {string} password
- * @returns {Promise<string>} Bearer token
- */
-async function login(username, password) {
-    try {
-        const response = await fetch(API_CONFIG.authEndpoint, {
-            method: 'POST',
-            headers: {
-                'Accept': '*/*',
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ username, password })
-        });
-
-        if (!response.ok) {
-            throw new Error(`Login failed: ${response.status} ${response.statusText}`);
-        }
-
-        const data = await response.json();
-
-        if (!data.success || !data.data?.accessToken) {
-            throw new Error(data.message || 'Login failed: No access token received');
-        }
-
-        const token = data.data.accessToken;
-
-        // Store token
-        API_CONFIG.bearerToken = token;
-        localStorage.setItem(API_CONFIG.storageKey, token);
-        isAuthenticated = true;
-
-        console.log('Login successful');
-        return token;
-
-    } catch (error) {
-        console.error('Login error:', error);
-        throw error;
-    }
-}
-
-/**
  * Load token from localStorage
- * @returns {boolean} True if token was loaded
  */
 function loadStoredToken() {
     const token = localStorage.getItem(API_CONFIG.storageKey);
@@ -111,6 +94,23 @@ function loadStoredToken() {
 }
 
 /**
+ * Get token from URL parameter
+ */
+function getTokenFromUrl() {
+    const urlParams = new URLSearchParams(window.location.search);
+    return urlParams.get('auth');
+}
+
+/**
+ * Get assetId from URL query parameter (?assetId=...)
+ */
+function getAssetIdFromUrl() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const id = urlParams.get('assetId');
+    return id ? Number(id) : null;
+}
+
+/**
  * Clear stored token (logout)
  */
 function clearToken() {
@@ -121,176 +121,20 @@ function clearToken() {
 }
 
 /**
- * Show login modal to get credentials
- * @returns {Promise<void>}
- */
-function showLoginModal() {
-    return new Promise((resolve, reject) => {
-        // Create modal
-        const modal = document.createElement('div');
-        modal.id = 'login-modal';
-        modal.innerHTML = `
-            <div style="
-                position: fixed;
-                top: 0;
-                left: 0;
-                width: 100vw;
-                height: 100vh;
-                background: rgba(0, 0, 0, 0.9);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                z-index: 10000;
-            ">
-                <div style="
-                    background: #1a1a2e;
-                    padding: 30px;
-                    border-radius: 12px;
-                    border: 2px solid #4fc3f7;
-                    max-width: 400px;
-                    width: 90%;
-                ">
-                    <h2 style="color: #4fc3f7; margin-bottom: 20px; text-align: center;">Login Required</h2>
-                    <p style="color: #aaa; margin-bottom: 20px; font-size: 14px; text-align: center;">
-                        Enter your credentials to access the Water Treatment Plant API
-                    </p>
-
-                    <form id="login-form">
-                        <div style="margin-bottom: 15px;">
-                            <label style="color: #fff; display: block; margin-bottom: 5px; font-size: 14px;">Username</label>
-                            <input
-                                type="text"
-                                id="login-username"
-                                required
-                                style="
-                                    width: 100%;
-                                    padding: 10px;
-                                    background: #0f0f1e;
-                                    border: 1px solid #4fc3f7;
-                                    border-radius: 4px;
-                                    color: #fff;
-                                    font-size: 14px;
-                                "
-                            />
-                        </div>
-
-                        <div style="margin-bottom: 20px;">
-                            <label style="color: #fff; display: block; margin-bottom: 5px; font-size: 14px;">Password</label>
-                            <input
-                                type="password"
-                                id="login-password"
-                                required
-                                style="
-                                    width: 100%;
-                                    padding: 10px;
-                                    background: #0f0f1e;
-                                    border: 1px solid #4fc3f7;
-                                    border-radius: 4px;
-                                    color: #fff;
-                                    font-size: 14px;
-                                "
-                            />
-                        </div>
-
-                        <div id="login-error" style="
-                            color: #ff5252;
-                            margin-bottom: 15px;
-                            font-size: 13px;
-                            display: none;
-                            text-align: center;
-                        "></div>
-
-                        <button
-                            type="submit"
-                            id="login-submit-btn"
-                            style="
-                                width: 100%;
-                                padding: 12px;
-                                background: #4fc3f7;
-                                border: none;
-                                border-radius: 4px;
-                                color: #000;
-                                font-weight: bold;
-                                font-size: 14px;
-                                cursor: pointer;
-                                transition: background 0.3s;
-                            "
-                        >
-                            Login
-                        </button>
-                    </form>
-                </div>
-            </div>
-        `;
-
-        document.body.appendChild(modal);
-
-        const form = document.getElementById('login-form');
-        const usernameInput = document.getElementById('login-username');
-        const passwordInput = document.getElementById('login-password');
-        const errorDiv = document.getElementById('login-error');
-        const submitBtn = document.getElementById('login-submit-btn');
-
-        // Focus username field
-        setTimeout(() => usernameInput.focus(), 100);
-
-        // Handle form submission
-        form.addEventListener('submit', async (e) => {
-            e.preventDefault();
-
-            const username = usernameInput.value.trim();
-            const password = passwordInput.value;
-
-            if (!username || !password) {
-                errorDiv.textContent = 'Please enter both username and password';
-                errorDiv.style.display = 'block';
-                return;
-            }
-
-            // Disable form
-            submitBtn.disabled = true;
-            submitBtn.textContent = 'Logging in...';
-            submitBtn.style.background = '#81d4fa';
-            errorDiv.style.display = 'none';
-
-            try {
-                // Attempt login
-                await login(username, password);
-
-                // Success - close modal
-                document.body.removeChild(modal);
-                resolve();
-
-            } catch (error) {
-                // Show error
-                errorDiv.textContent = error.message || 'Login failed. Please try again.';
-                errorDiv.style.display = 'block';
-
-                // Re-enable form
-                submitBtn.disabled = false;
-                submitBtn.textContent = 'Login';
-                submitBtn.style.background = '#4fc3f7';
-                passwordInput.value = '';
-                passwordInput.focus();
-            }
-        });
-    });
-}
-
-/**
- * Get token from URL parameter
- * @returns {string|null} Token from URL or null
- */
-function getTokenFromUrl() {
-    const urlParams = new URLSearchParams(window.location.search);
-    return urlParams.get('auth');
-}
-
-/**
- * Ensure user is authenticated, get token from URL or localStorage
- * @returns {Promise<void>}
+ * Ensure user is authenticated, get token from URL or localStorage.
+ * Also resolves assetId from URL query param.
  */
 async function ensureAuthenticated() {
+    // Resolve assetId from URL
+    const urlAssetId = getAssetIdFromUrl();
+    if (urlAssetId) {
+        API_CONFIG.assetId = urlAssetId;
+        console.log(`Asset ID set from URL: ${urlAssetId}`);
+    } else {
+        console.error('No assetId provided. Please add ?assetId=YOUR_ASSET_ID to the URL');
+        throw new Error('No assetId provided in URL');
+    }
+
     // First, try to get token from URL parameter
     const urlToken = getTokenFromUrl();
     if (urlToken) {
@@ -306,7 +150,7 @@ async function ensureAuthenticated() {
         return;
     }
 
-    // No token available - log error and don't start polling
+    // No token available
     console.error('No authentication token found. Please provide token via URL parameter: ?auth=YOUR_TOKEN');
     isAuthenticated = false;
     throw new Error('No authentication token provided');
@@ -318,11 +162,8 @@ async function ensureAuthenticated() {
 
 /**
  * Transform API response to visualization format
- * @param {Object} apiResponse - Raw API response
- * @returns {Object} Transformed data for visualization
  */
 function transformApiData(apiResponse) {
-    // Extract the water treatment plant data
     const wtpData = apiResponse?.data?.waterTreatmentPlantComponentsData?.[0];
 
     if (!wtpData) {
@@ -330,9 +171,6 @@ function transformApiData(apiResponse) {
         return null;
     }
 
-    // Transform to visualization format
-    // Note: For tanks with 2 instances (SCT, CWT), we're using single values from API
-    // You may need to adjust this if you want different values for each tank
     return {
         RWT: {
             Level: wtpData.rwtLevel || 0,
@@ -427,11 +265,10 @@ function transformApiData(apiResponse) {
 // API FETCHING
 // ============================================================================
 
-/**
- * Fetch data from the API
- * @returns {Promise<Object>} Transformed plant data
- */
 async function fetchPlantData() {
+    if (!_baseUrl) {
+        throw new Error('No valid API base URL — invalid or missing ?mode= parameter');
+    }
     const url = `${API_CONFIG.dataEndpoint}?assetId=${API_CONFIG.assetId}`;
 
     try {
@@ -445,14 +282,12 @@ async function fetchPlantData() {
         });
 
         if (!response.ok) {
-            // Handle 401 Unauthorized - token expired or invalid
             if (response.status === 401) {
                 console.error('Authentication failed - token is invalid or expired');
                 console.error('Please reload the page with a valid token: ?auth=YOUR_TOKEN');
                 clearToken();
                 stopPolling();
 
-                // Update UI to show authentication error
                 const dataSource = document.getElementById('data-source');
                 if (dataSource) {
                     dataSource.textContent = 'Data: Invalid Token';
@@ -467,19 +302,16 @@ async function fetchPlantData() {
 
         const data = await response.json();
 
-        // Check if API returned success
         if (!data.success) {
             throw new Error(data.message || 'API returned unsuccessful response');
         }
 
-        // Transform and return data
         const transformedData = transformApiData(data);
 
         if (!transformedData) {
             throw new Error('Failed to transform API data');
         }
 
-        // Update connection status
         connectionStatus = 'connected';
         consecutiveErrors = 0;
         lastFetchTime = new Date();
@@ -491,7 +323,6 @@ async function fetchPlantData() {
         console.error('Error fetching plant data:', error);
         consecutiveErrors++;
 
-        // Update connection status
         if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
             connectionStatus = 'disconnected';
         } else {
@@ -500,7 +331,6 @@ async function fetchPlantData() {
 
         updateConnectionIndicator();
 
-        // Stop polling after too many consecutive errors
         if (consecutiveErrors >= API_CONFIG.maxRetries) {
             console.error(`Stopping polling after ${consecutiveErrors} consecutive errors`);
             stopPolling();
@@ -510,23 +340,18 @@ async function fetchPlantData() {
     }
 }
 
-/**
- * Fetch and update visualization with API data
- */
 async function fetchAndUpdate() {
     try {
         const plantData = await fetchPlantData();
 
-        // Update the visualization
         if (window.WTPVisualizer) {
             window.WTPVisualizer.updatePlantData(plantData);
         } else {
-            console.warn('WTPVisualizer not found. Make sure wtp-visualizer.js is loaded.');
+            console.warn('WTPVisualizer not found');
         }
 
     } catch (error) {
         console.error('Failed to fetch and update:', error);
-        // Error is already handled in fetchPlantData
     }
 }
 
@@ -534,41 +359,21 @@ async function fetchAndUpdate() {
 // POLLING CONTROL
 // ============================================================================
 
-/**
- * Start polling the API at configured interval
- */
 function startPolling() {
     if (isPolling) {
         console.log('Polling already active');
         return;
     }
 
-    console.log(`Starting API polling every ${API_CONFIG.pollingInterval}ms`);
-
-    // Stop simulation mode if it's running
-    // if (window.WTPVisualizer) {
-    //     const simBtn = document.getElementById('btn-simulate');
-    //     if (simBtn && simBtn.classList.contains('active')) {
-    //         window.WTPVisualizer.stopSimulation();
-    //         simBtn.classList.remove('active');
-    //         simBtn.textContent = 'Simulate Data';
-    //     }
-    // }
-
+    console.log(`Starting WTP API polling every ${API_CONFIG.pollingInterval}ms`);
     isPolling = true;
 
-    // First fetch immediately
     fetchAndUpdate();
-
-    // Then poll at interval
     pollingIntervalId = setInterval(fetchAndUpdate, API_CONFIG.pollingInterval);
 
     updateConnectionIndicator();
 }
 
-/**
- * Stop polling the API
- */
 function stopPolling() {
     if (!isPolling) {
         console.log('Polling not active');
@@ -587,9 +392,6 @@ function stopPolling() {
     updateConnectionIndicator();
 }
 
-/**
- * Toggle polling on/off
- */
 function togglePolling() {
     if (isPolling) {
         stopPolling();
@@ -602,13 +404,7 @@ function togglePolling() {
 // UI UPDATES
 // ============================================================================
 
-/**
- * Update connection status indicator in UI
- */
 function updateConnectionIndicator() {
-    const indicator = document.getElementById('api-status-indicator');
-    if (!indicator) return;
-
     const statusText = document.getElementById('api-status-text');
     const statusDot = document.getElementById('api-status-dot');
     const lastUpdate = document.getElementById('api-last-update');
@@ -640,7 +436,6 @@ function updateConnectionIndicator() {
         lastUpdate.textContent = timeAgo < 60 ? `${timeAgo}s ago` : `${Math.floor(timeAgo / 60)}m ago`;
     }
 
-    // Update data source indicator
     if (dataSource) {
         if (isPolling && connectionStatus === 'connected') {
             dataSource.textContent = 'Data: Live API';
@@ -663,49 +458,10 @@ setInterval(() => {
 }, 1000);
 
 // ============================================================================
-// INITIALIZATION
+// CONNECTION INDICATOR UI
 // ============================================================================
 
-/**
- * Initialize API integration
- */
-async function initAPI() {
-    console.log('API Integration initialized');
-
-    // Add connection indicator to DOM if it doesn't exist
-    createConnectionIndicator();
-
-    // Ensure user is authenticated
-    try {
-        await ensureAuthenticated();
-
-        // Auto-start polling if configured
-        if (API_CONFIG.autoStart) {
-            // Wait a bit for the visualizer to load
-            setTimeout(() => {
-                startPolling();
-            }, 1000);
-        }
-    } catch (error) {
-        console.error('Authentication failed:', error);
-        console.error('Usage: Add ?auth=YOUR_BEARER_TOKEN to the URL');
-        connectionStatus = 'error';
-        updateConnectionIndicator();
-
-        // Update data source to show error
-        const dataSource = document.getElementById('data-source');
-        if (dataSource) {
-            dataSource.textContent = 'Data: No Token';
-            dataSource.style.color = '#ff5252';
-        }
-    }
-}
-
-/**
- * Create connection status indicator in UI
- */
 function createConnectionIndicator() {
-    // Check if indicator already exists
     if (document.getElementById('api-status-indicator')) return;
 
     const indicator = document.createElement('div');
@@ -767,7 +523,6 @@ function createConnectionIndicator() {
 
     document.body.appendChild(indicator);
 
-    // Add toggle button listener
     const toggleBtn = document.getElementById('api-toggle-btn');
     if (toggleBtn) {
         toggleBtn.addEventListener('click', () => {
@@ -777,29 +532,6 @@ function createConnectionIndicator() {
         });
     }
 
-    // Add logout button listener
-    // const logoutBtn = document.getElementById('api-logout-btn');
-    // if (logoutBtn) {
-    //     logoutBtn.addEventListener('click', async () => {
-    //         if (confirm('Are you sure you want to logout? This will clear your stored token. To re-authenticate, reload the page with ?auth=YOUR_TOKEN')) {
-    //             stopPolling();
-    //             clearToken();
-    //             connectionStatus = 'disconnected';
-    //             updateConnectionIndicator();
-
-    //             // Update data source indicator
-    //             const dataSource = document.getElementById('data-source');
-    //             if (dataSource) {
-    //                 dataSource.textContent = 'Data: Logged Out';
-    //                 dataSource.style.color = '#888';
-    //             }
-
-    //             console.log('Logged out. To re-authenticate, reload the page with ?auth=YOUR_TOKEN');
-    //         }
-    //     });
-    // }
-
-    // Update button text on initialization
     if (API_CONFIG.autoStart) {
         setTimeout(() => {
             if (toggleBtn) {
@@ -811,34 +543,74 @@ function createConnectionIndicator() {
 }
 
 // ============================================================================
+// INITIALIZATION
+// ============================================================================
+
+async function initAPI() {
+    console.log('WTP API Integration initialized');
+
+    createConnectionIndicator();
+
+    // Abort immediately if mode is invalid — do not show static data
+    if (!_currentMode) {
+        connectionStatus = 'error';
+        updateConnectionIndicator();
+        const dataSource = document.getElementById('data-source');
+        if (dataSource) {
+            dataSource.textContent = 'Data: Invalid Mode';
+            dataSource.style.color = '#ff5252';
+        }
+        if (window.WTPVisualizer) window.WTPVisualizer.clearData();
+        return;
+    }
+
+    try {
+        await ensureAuthenticated();
+
+        if (API_CONFIG.autoStart) {
+            setTimeout(() => {
+                startPolling();
+            }, 1000);
+        }
+    } catch (error) {
+        console.error('Authentication failed:', error);
+        connectionStatus = 'error';
+        updateConnectionIndicator();
+
+        const dataSource = document.getElementById('data-source');
+        if (dataSource) {
+            const isNoAsset = error.message.includes('assetId');
+            dataSource.textContent = isNoAsset ? 'Data: No Asset ID' : 'Data: No Token';
+            dataSource.style.color = '#ff5252';
+        }
+
+        // Ensure the visualizer shows no data (not static defaults)
+        if (window.WTPVisualizer) window.WTPVisualizer.clearData();
+    }
+}
+
+// ============================================================================
 // EXPORTS
 // ============================================================================
 
-// Make functions available globally
 window.WTPAPI = {
-    // Authentication
-    login,
     clearToken,
     ensureAuthenticated,
     isAuthenticated: () => isAuthenticated,
 
-    // Data fetching
     startPolling,
     stopPolling,
     togglePolling,
     fetchPlantData,
     transformApiData,
 
-    // Status
     getConnectionStatus: () => connectionStatus,
     getLastFetchTime: () => lastFetchTime,
     isPolling: () => isPolling,
 
-    // Config
     config: API_CONFIG
 };
 
-// Initialize when DOM is ready
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initAPI);
 } else {
