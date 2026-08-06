@@ -21,7 +21,9 @@ jobs:
 
         # Run remote commands
         ssh -i key.pem -o StrictHostKeyChecking=no \
-          ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }} << 'EOF'
+          ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }} << 'EOF'       
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
           cd /home/ubuntu/wtp-3d-modal-app
-          pm2 restart wtp-3d-app
+          pm2 restart wtp-3d-app 
         EOF
